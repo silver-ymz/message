@@ -1,0 +1,13 @@
+# Message - A chat room application with full anonymity.
+
+## dependencies
+- [Boost](https://www.boost.org/) >= 1.66
+- [rapidjson](https://http://rapidjson.org/) >= 1.1.0
+- [fmt](https://fmt.dev) >= 6.0.0
+- [Qt](https://www.qt.io/) >= 5.12
+
+## build
+```
+$ cmake -S . -B build -GNinja -DCMAKE_BUILD_TYPE=DEBUG
+$ cmake --build build
+```

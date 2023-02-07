@@ -1,3 +1,14 @@
+/**
+ * @file listener.cpp
+ * @brief Listener class implementation
+ *
+ * @author salvor
+ * @version 0.1
+ * @date 2023-02-05
+ *
+ * Copyright (c) 2023 Salvor
+ */
+
 #include "listener.h"
 #include "base.h"
 #include "session.h"

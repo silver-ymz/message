@@ -1,5 +1,20 @@
+/**
+ * @file session.cpp
+ * @brief Session class implementation.
+ *
+ * @author salvor
+ * @version 0.1
+ * @date 2023-02-05
+ *
+ * Copyright (c) 2023 Salvor
+ */
+
 #include "session.h"
+#include "message.h"
 #include "state.h"
+#include "websocket.h"
+
+#include <fmt/format.h>
 #include <memory>
 #include <utility>
 
@@ -8,7 +23,9 @@ Session::Session(tcp::socket &&socket, std::shared_ptr<State> state)
       buffer_(std::make_shared<beast::flat_buffer>()) {}
 
 Session::~Session() {
-    state_->leave(this);
+    state_->leave({this->shared_from_this(), username_});
+    state_->send_to_all(std::make_shared<Message>(fmt::format(
+        R"({{"type": "user_left", "username": "{}"}})", username_)));
 }
 
 void Session::run() {
@@ -18,17 +35,7 @@ void Session::run() {
 }
 
 void Session::on_run() {
-    // Set suggested timeout settings for the websocket
-    ws_.set_option(
-        websocket::stream_base::timeout::suggested(beast::role_type::server));
-
-    // Set a decorator to change the Server of the handshake
-    ws_.set_option(
-        websocket::stream_base::decorator([](websocket::response_type &res) {
-            res.set(http::field::server,
-                    std::string(BOOST_BEAST_VERSION_STRING) +
-                        " message-server-async");
-        }));
+    ws_.run();
 
     // Accept the websocket handshake
     ws_.async_accept(
@@ -39,7 +46,14 @@ void Session::on_accept(beast::error_code ec) {
     if (ec)
         return fail(ec, "accept");
 
-    state_->join(this);
+    username_ = ws_.login();
+
+    state_->send_to_all(std::make_shared<Message>(fmt::format(
+        R"({{"type": "user_joined", "username": "{}"}})", username_)));
+
+    state_->join({this->shared_from_this(), username_});
+
+    ws_.login_success();
 
     // Read a message
     do_read();
@@ -55,39 +69,35 @@ void Session::on_read(beast::error_code ec, std::size_t bytes_transferred) {
     boost::ignore_unused(bytes_transferred);
 
     // This indicates that the session was closed
-    if (ec == websocket::error::closed)
+    if (ec == websocket::error::closed || ec == asio::error::eof) {
         return;
+    }
 
-    if (ec)
-        fail(ec, "read");
+    if (ec) {
+        return fail(ec, "read");
+    }
 
-    fmt::print(stderr, "read: {}\n", beast::buffers_to_string(buffer_->data()));
-
-    state_->send_to_all(beast::buffers_to_string(buffer_->data()));
+    state_->send_to_all(
+        std::make_shared<Message>(beast::buffers_to_string(buffer_->data())));
     buffer_->consume(buffer_->size());
     do_read();
 }
 
-void Session::send(std::string msg) {
-    /*if (buf == buffer_) {
-        return;
-    }*/
+void Session::send(PassMsg msg) {
 
     // Post our work to the strand, this ensures
-    asio::post(
-        ws_.get_executor(),
-        beast::bind_front_handler(&Session::on_send, shared_from_this(), msg));
+    asio::post(ws_.get_executor(),
+               beast::bind_front_handler(&Session::on_send, shared_from_this(),
+                                         msg->stringify()));
 }
 
-void Session::on_send(const std::string &msg) {
+void Session::on_send(const std::string msg) {
     queue_.push(msg);
 
     // Are we already writing?
     if (queue_.size() > 1) {
         return;
     }
-
-    fmt::print(stderr, "write: {}\n", queue_.front());
 
     ws_.async_write(
         asio::buffer(queue_.front()),
@@ -97,8 +107,13 @@ void Session::on_send(const std::string &msg) {
 void Session::on_write(beast::error_code ec, std::size_t bytes_transferred) {
     boost::ignore_unused(bytes_transferred);
 
-    if (ec)
+    if (ec == websocket::error::closed || ec == asio::error::eof) {
+        return;
+    }
+
+    if (ec) {
         return fail(ec, "write");
+    }
 
     queue_.pop();
 
